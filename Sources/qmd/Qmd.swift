@@ -11,13 +11,26 @@ struct Qmd: AsyncParsableCommand {
         defaultSubcommand: Query.self)
 }
 
+/// qmd's default index location — `$XDG_CACHE_HOME/qmd/index.sqlite`, falling
+/// back to `~/.cache/qmd/index.sqlite`, matching the upstream CLI.
+let defaultIndexPath: String = {
+    let cache = ProcessInfo.processInfo.environment["XDG_CACHE_HOME"]
+        ?? (NSHomeDirectory() + "/.cache")
+    return cache + "/qmd/index.sqlite"
+}()
+
 /// `--db` — the on-disk index. Shared by every subcommand.
 struct StoreOptions: ParsableArguments {
-    @Option(name: [.customShort("d"), .long], help: "Path to the index database.")
-    var db = "qmd-index.sqlite"
+    @Option(name: [.customShort("d"), .long],
+            help: "Path to the index database (default: $XDG_CACHE_HOME/qmd/index.sqlite).")
+    var db = defaultIndexPath
 
     func open() throws -> SQLiteVectorStore {
-        try SQLiteVectorStore(storage: .file(db))
+        let directory = (db as NSString).deletingLastPathComponent
+        if !directory.isEmpty {
+            try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        }
+        return try SQLiteVectorStore(storage: .file(db))
     }
 }
 
