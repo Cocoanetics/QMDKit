@@ -7,31 +7,34 @@ struct Qmd: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "qmd",
         abstract: "On-device semantic + keyword search over your Markdown.",
-        subcommands: [Index.self, Search.self, VSearch.self, Query.self, Status.self],
+        subcommands: [
+            Index.self, Search.self, VSearch.self, Query.self, Get.self, Ls.self,
+            Status.self, Update.self, CollectionCommand.self, Init.self,
+        ],
         defaultSubcommand: Query.self)
 }
 
-/// qmd's default index location — `$XDG_CACHE_HOME/qmd/index.sqlite`, falling
-/// back to `~/.cache/qmd/index.sqlite`, matching the upstream CLI.
-let defaultIndexPath: String = {
-    let cache = ProcessInfo.processInfo.environment["XDG_CACHE_HOME"]
-        ?? (NSHomeDirectory() + "/.cache")
-    return cache + "/qmd/index.sqlite"
-}()
-
-/// `--db` — the on-disk index. Shared by every subcommand.
+/// `--db` plus the resolved qmd home — a local `./.qmd` when present (see
+/// `qmd init`), otherwise `$XDG_CACHE_HOME/qmd`. Shared by every subcommand.
 struct StoreOptions: ParsableArguments {
     @Option(name: [.customShort("d"), .long],
-            help: "Path to the index database (default: $XDG_CACHE_HOME/qmd/index.sqlite).")
-    var db = defaultIndexPath
+            help: "Index database path (default: <qmd home>/index.sqlite).")
+    var db: String?
+
+    var home: String { db.map { ($0 as NSString).deletingLastPathComponent } ?? qmdHome() }
+    var indexPath: String { db ?? (qmdHome() + "/index.sqlite") }
+    var configPath: String { home + "/collections.json" }
 
     func open() throws -> SQLiteVectorStore {
-        let directory = (db as NSString).deletingLastPathComponent
+        let directory = (indexPath as NSString).deletingLastPathComponent
         if !directory.isEmpty {
             try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         }
-        return try SQLiteVectorStore(storage: .file(db))
+        return try SQLiteVectorStore(storage: .file(indexPath))
     }
+
+    func loadConfig() -> Config { Config.load(at: configPath) }
+    func saveConfig(_ config: Config) throws { try config.save(to: configPath) }
 }
 
 /// `-n` / `--json` — shared result formatting.
@@ -138,8 +141,13 @@ extension Qmd {
         static let configuration = CommandConfiguration(abstract: "Show index information.")
         @OptionGroup var store: StoreOptions
         func run() async throws {
-            print("db:     \(store.db)")
+            print("index:  \(store.indexPath)")
             print("chunks: \(try store.open().count())")
+            let collections = store.loadConfig().collections
+            if !collections.isEmpty {
+                print("collections:")
+                for collection in collections { print("  \(collection.name)  \(collection.path)") }
+            }
         }
     }
 }
