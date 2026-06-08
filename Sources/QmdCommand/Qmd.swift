@@ -1,10 +1,13 @@
 import ArgumentParser
 import Foundation
 import QMDKit
+import ShellKit
 
-@main
-struct Qmd: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(
+/// `qmd` — on-device semantic + keyword search over Markdown. Public so a
+/// ShellKit host (SwiftBash) can register it as a sandboxed builtin via
+/// `shell.register(Qmd.self)`; also runnable standalone (`await Qmd.main()`).
+public struct Qmd: AsyncParsableCommand {
+    public static let configuration = CommandConfiguration(
         commandName: "qmd",
         abstract: "On-device semantic + keyword search over your Markdown.",
         subcommands: [
@@ -12,6 +15,8 @@ struct Qmd: AsyncParsableCommand {
             Status.self, Update.self, CollectionCommand.self, Init.self,
         ],
         defaultSubcommand: Query.self)
+
+    public init() {}
 }
 
 /// `--db` plus the resolved qmd home — a local `./.qmd` when present (see
@@ -25,19 +30,22 @@ struct StoreOptions: ParsableArguments {
     var indexPath: String { db ?? (qmdHome() + "/index.sqlite") }
     var configPath: String { home + "/collections.json" }
 
-    func open() throws -> SQLiteVectorStore {
-        let directory = (indexPath as NSString).deletingLastPathComponent
+    /// Opens the store, gating the index path through the host's sandbox first.
+    func open() async throws -> SQLiteVectorStore {
+        let index = Shell.resolve(indexPath)
+        try await Shell.authorize(index)
+        let directory = (index.path as NSString).deletingLastPathComponent
         if !directory.isEmpty {
             try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         }
-        return try SQLiteVectorStore(storage: .file(indexPath), embeddingProvider: Self.embeddingProvider())
+        return try SQLiteVectorStore(storage: .file(index.path), embeddingProvider: Self.embeddingProvider())
     }
 
     /// OpenAI when `OPENAI_API_KEY` is set (model overridable via
     /// `QMD_EMBED_MODEL`); otherwise nil, so the store uses the on-device Apple
     /// NaturalLanguage embedder.
     static func embeddingProvider() -> EmbeddingProvider? {
-        let environment = ProcessInfo.processInfo.environment
+        let environment = Shell.current.environment
         guard let key = environment["OPENAI_API_KEY"], !key.isEmpty else { return nil }
         let model = environment["QMD_EMBED_MODEL"] ?? "text-embedding-3-small"
         return OpenAIEmbeddingProvider(apiKey: key, model: model)
@@ -73,7 +81,7 @@ struct OutputOptions: ParsableArguments {
         switch format {
             case .cli:   renderCLI(results)
             case .json:  renderJSON(results)
-            case .files: for match in results { print("\(match.citation)\t\(score(match))") }
+            case .files: for match in results { out("\(match.citation)\t\(score(match))") }
             case .csv:   renderCSV(results)
             case .md:    renderMarkdown(results)
             case .xml:   renderXML(results)
@@ -87,11 +95,11 @@ struct OutputOptions: ParsableArguments {
     }
 
     private func renderCLI(_ results: [MemoryMatch]) {
-        guard !results.isEmpty else { FileHandle.standardError.write(Data("no matches\n".utf8)); return }
+        guard !results.isEmpty else { warn("no matches"); return }
         for match in results {
-            print("\(match.citation)  \(percent(match))%")
+            out("\(match.citation)  \(percent(match))%")
             let snippet = firstLine(match.text)
-            if !snippet.isEmpty { print("  \(snippet)") }
+            if !snippet.isEmpty { out("  \(snippet)") }
         }
     }
 
@@ -100,7 +108,7 @@ struct OutputOptions: ParsableArguments {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         if let data = try? encoder.encode(results.map(ResultDTO.init)),
            let text = String(data: data, encoding: .utf8) {
-            print(text)
+            out(text)
         }
     }
 
@@ -109,16 +117,16 @@ struct OutputOptions: ParsableArguments {
             guard value.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" }) else { return value }
             return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
         }
-        print("citation,score,path,source,startLine,endLine,text")
+        out("citation,score,path,source,startLine,endLine,text")
         for match in results {
-            print([match.citation, score(match), match.path, match.source,
-                   "\(match.startLine)", "\(match.endLine)", match.text].map(field).joined(separator: ","))
+            out([match.citation, score(match), match.path, match.source,
+                 "\(match.startLine)", "\(match.endLine)", match.text].map(field).joined(separator: ","))
         }
     }
 
     private func renderMarkdown(_ results: [MemoryMatch]) {
         for match in results {
-            print("### \(match.citation)\n\n**score:** \(percent(match))%\n\n\(match.text)\n")
+            out("### \(match.citation)\n\n**score:** \(percent(match))%\n\n\(match.text)\n")
         }
     }
 
@@ -129,15 +137,15 @@ struct OutputOptions: ParsableArguments {
                 .replacingOccurrences(of: ">", with: "&gt;")
                 .replacingOccurrences(of: "\"", with: "&quot;")
         }
-        print("<results>")
+        out("<results>")
         for match in results {
-            print("  <result citation=\"\(escape(match.citation))\" score=\"\(score(match))\""
+            out("  <result citation=\"\(escape(match.citation))\" score=\"\(score(match))\""
                 + " path=\"\(escape(match.path))\" source=\"\(escape(match.source))\""
                 + " startLine=\"\(match.startLine)\" endLine=\"\(match.endLine)\">")
-            print("    <text>\(escape(match.text))</text>")
-            print("  </result>")
+            out("    <text>\(escape(match.text))</text>")
+            out("  </result>")
         }
-        print("</results>")
+        out("</results>")
     }
 }
 
@@ -159,14 +167,14 @@ extension Qmd {
         @Argument(help: "Directory to index.") var directory: String
 
         func run() async throws {
-            let vectorStore = try store.open()
-            // Canonicalize so workspace-relative stripping matches the paths the
-            // directory enumerator yields (e.g. /var vs /private/var on macOS).
-            let root = URL(fileURLWithPath: directory).resolvingSymlinksInPath()
-            let files = markdownFiles(in: root)
-            FileHandle.standardError.write(Data("indexing \(files.count) file(s)…\n".utf8))
+            let vectorStore = try await store.open()
+            // Resolve against the shell CWD; canonicalize so workspace-relative
+            // stripping matches the enumerator (/var vs /private/var on macOS).
+            let root = Shell.resolve(directory).resolvingSymlinksInPath()
+            let files = await authorizedFiles(markdownFiles(in: root))
+            warn("indexing \(files.count) file(s)…")
             let summary = try await vectorStore.sync(files: files, source: source, workspaceDir: root.path)
-            print("indexed \(summary.indexed), unchanged \(summary.unchanged), "
+            out("indexed \(summary.indexed), unchanged \(summary.unchanged), "
                 + "removed \(summary.removed), missing \(summary.missing) — "
                 + "\(try vectorStore.count()) chunks total")
         }
@@ -179,7 +187,7 @@ extension Qmd {
         @Argument(parsing: .remaining, help: "Query terms.") var query: [String]
 
         func run() async throws {
-            let results = try store.open().keywordSearch(ftsQuery(query), topN: output.count)
+            let results = try await store.open().keywordSearch(ftsQuery(query), topN: output.count)
             output.render(results)
         }
     }
@@ -214,33 +222,44 @@ extension Qmd {
         static let configuration = CommandConfiguration(abstract: "Show index information.")
         @OptionGroup var store: StoreOptions
         func run() async throws {
-            print("index:      \(store.indexPath)")
+            out("index:      \(store.indexPath)")
             let backend = StoreOptions.embeddingProvider()?.embeddingModelIdentifier
                 ?? "Apple NaturalLanguage (on-device)"
-            print("embeddings: \(backend)")
-            print("chunks:     \(try store.open().count())")
+            out("embeddings: \(backend)")
+            out("chunks:     \(try await store.open().count())")
             let collections = store.loadConfig().collections
             if !collections.isEmpty {
-                print("collections:")
-                for collection in collections { print("  \(collection.name)  \(collection.path)") }
+                out("collections:")
+                for collection in collections { out("  \(collection.name)  \(collection.path)") }
             }
         }
     }
 }
 
-/// All `*.md` files under `dir`, as absolute paths.
+/// All `*.md` files under `dir`, as absolute, symlink-resolved paths.
 func markdownFiles(in dir: URL) -> [String] {
     guard let enumerator = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil) else {
         return []
     }
     var paths: [String] = []
-    // Resolve symlinks so paths canonicalize the same way as the (also
-    // symlink-resolved) workspace root — otherwise macOS's /var vs /private/var
-    // defeats the workspace-relative stripping.
     for case let url as URL in enumerator where url.pathExtension.lowercased() == "md" {
         paths.append(url.resolvingSymlinksInPath().path)
     }
     return paths.sorted()
+}
+
+/// Keep only the paths the host's sandbox authorizes (a no-op when unsandboxed).
+func authorizedFiles(_ paths: [String]) async -> [String] {
+    var result: [String] = []
+    for path in paths {
+        do {
+            try await Shell.authorize(URL(fileURLWithPath: path))
+            result.append(path)
+        } catch {
+            warn("denied: \(path)")
+        }
+    }
+    return result
 }
 
 /// Turn free text into a safe FTS5 query: bare terms can trip on punctuation,

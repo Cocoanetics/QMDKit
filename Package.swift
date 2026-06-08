@@ -14,37 +14,54 @@ let package = Package(
     ],
     products: [
         .library(name: "QMDKit", targets: ["QMDKit"]),
+        // The qmd command, exposed so SwiftBash (or any ShellKit host) can
+        // register it as a sandboxed builtin: `shell.register(Qmd.self)`.
+        .library(name: "QmdCommand", targets: ["QmdCommand"]),
+        .executable(name: "qmd", targets: ["qmd"]),
     ],
     dependencies: [
-        // The SQLite engine: vec0 (sqlite-vec) + FTS5. QMDKit is the vector
-        // store, so it always needs both — the traits are unconditional.
-        // Pinned to main until SQLiteKit tags a release.
+        // The SQLite engine: vec0 (sqlite-vec) + FTS5. Always needed.
         .package(url: "https://github.com/Cocoanetics/SQLiteKit",
                  branch: "main",
                  traits: ["FTS5", "SQLiteVec"]),
-        // For the `qmd` CLI only — the QMDKit library stays ArgumentParser-free.
+        // The qmd CLI's argument parser (command targets only).
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
+        // The virtualized shell host — Command protocol, Shell.current IO,
+        // sandbox authorization — for the qmd builtin. Pinned to main.
+        .package(url: "https://github.com/Cocoanetics/ShellKit", branch: "main"),
     ],
     targets: [
-        // The engine: a vec0 + FTS5 hybrid store with an on-device Apple
-        // NaturalLanguage embedder, ported from SwiftAgents' VectorStore.
+        // The engine — no ShellKit / ArgumentParser, so library consumers (the
+        // wiki app, SwiftAgents) take it with a minimal closure.
         .target(
             name: "QMDKit",
             dependencies: [
                 .product(name: "SQLiteKit", package: "SQLiteKit"),
             ]
         ),
-        .testTarget(
-            name: "QMDKitTests",
-            dependencies: ["QMDKit"]
-        ),
-        // The `qmd` command-line tool over QMDKit (semantic + keyword search).
-        .executableTarget(
-            name: "qmd",
+        .testTarget(name: "QMDKitTests", dependencies: ["QMDKit"]),
+
+        // The qmd command logic — routes IO through ShellKit's `Shell.current`
+        // and gates every path via `Shell.authorize`, so it runs both
+        // standalone and as a sandboxed SwiftBash builtin.
+        .target(
+            name: "QmdCommand",
             dependencies: [
                 "QMDKit",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "ShellKit", package: "ShellKit"),
             ]
         ),
+        .testTarget(
+            name: "QmdCommandTests",
+            dependencies: [
+                "QmdCommand",
+                .product(name: "ShellKit", package: "ShellKit"),
+            ]
+        ),
+
+        // Thin @main wrapper; standalone `Shell.current` defaults to process
+        // stdio with no sandbox, so the same command code runs unsandboxed here.
+        .executableTarget(name: "qmd", dependencies: ["QmdCommand"]),
     ]
 )
