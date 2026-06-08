@@ -30,7 +30,17 @@ struct StoreOptions: ParsableArguments {
         if !directory.isEmpty {
             try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         }
-        return try SQLiteVectorStore(storage: .file(indexPath))
+        return try SQLiteVectorStore(storage: .file(indexPath), embeddingProvider: Self.embeddingProvider())
+    }
+
+    /// OpenAI when `OPENAI_API_KEY` is set (model overridable via
+    /// `QMD_EMBED_MODEL`); otherwise nil, so the store uses the on-device Apple
+    /// NaturalLanguage embedder.
+    static func embeddingProvider() -> EmbeddingProvider? {
+        let environment = ProcessInfo.processInfo.environment
+        guard let key = environment["OPENAI_API_KEY"], !key.isEmpty else { return nil }
+        let model = environment["QMD_EMBED_MODEL"] ?? "text-embedding-3-small"
+        return OpenAIEmbeddingProvider(apiKey: key, model: model)
     }
 
     func loadConfig() -> Config { Config.load(at: configPath) }
@@ -204,8 +214,11 @@ extension Qmd {
         static let configuration = CommandConfiguration(abstract: "Show index information.")
         @OptionGroup var store: StoreOptions
         func run() async throws {
-            print("index:  \(store.indexPath)")
-            print("chunks: \(try store.open().count())")
+            print("index:      \(store.indexPath)")
+            let backend = StoreOptions.embeddingProvider()?.embeddingModelIdentifier
+                ?? "Apple NaturalLanguage (on-device)"
+            print("embeddings: \(backend)")
+            print("chunks:     \(try store.open().count())")
             let collections = store.loadConfig().collections
             if !collections.isEmpty {
                 print("collections:")
