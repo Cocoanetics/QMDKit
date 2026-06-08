@@ -37,34 +37,97 @@ struct StoreOptions: ParsableArguments {
     func saveConfig(_ config: Config) throws { try config.save(to: configPath) }
 }
 
-/// `-n` / `--json` — shared result formatting.
+/// Output format — exposed as mutually-exclusive flags (`--json`, `--files`, …).
+enum OutputFormat: String, EnumerableFlag {
+    case cli, json, files, csv, md, xml
+    static func help(for value: OutputFormat) -> ArgumentHelp? {
+        switch value {
+            case .cli:   return "Colorized listing (default)."
+            case .json:  return "JSON array."
+            case .files: return "`citation<TAB>score` per line, for piping to agents."
+            case .csv:   return "CSV with a header row."
+            case .md:    return "Markdown."
+            case .xml:   return "XML."
+        }
+    }
+}
+
+/// `-n` plus the result format. Shared by every search subcommand.
 struct OutputOptions: ParsableArguments {
     @Option(name: .customShort("n"), help: "Maximum number of results.")
     var count = 5
-    @Flag(name: .long, help: "Emit JSON instead of the default listing.")
-    var json = false
+    @Flag(help: "Output format.")
+    var format: OutputFormat = .cli
 
     func render(_ results: [MemoryMatch]) {
-        if json {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-            if let data = try? encoder.encode(results.map(ResultDTO.init)),
-               let text = String(data: data, encoding: .utf8) {
-                print(text)
-            }
-            return
+        switch format {
+            case .cli:   renderCLI(results)
+            case .json:  renderJSON(results)
+            case .files: for match in results { print("\(match.citation)\t\(score(match))") }
+            case .csv:   renderCSV(results)
+            case .md:    renderMarkdown(results)
+            case .xml:   renderXML(results)
         }
-        guard !results.isEmpty else {
-            FileHandle.standardError.write(Data("no matches\n".utf8))
-            return
-        }
+    }
+
+    private func score(_ match: MemoryMatch) -> String { String(format: "%.4f", match.score) }
+    private func percent(_ match: MemoryMatch) -> Int { Int((match.score * 100).rounded()) }
+    private func firstLine(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+    }
+
+    private func renderCLI(_ results: [MemoryMatch]) {
+        guard !results.isEmpty else { FileHandle.standardError.write(Data("no matches\n".utf8)); return }
         for match in results {
-            let percent = Int((match.score * 100).rounded())
-            let snippet = match.text.split(separator: "\n", omittingEmptySubsequences: true)
-                .first.map(String.init) ?? ""
-            print("\(match.citation)  \(percent)%")
+            print("\(match.citation)  \(percent(match))%")
+            let snippet = firstLine(match.text)
             if !snippet.isEmpty { print("  \(snippet)") }
         }
+    }
+
+    private func renderJSON(_ results: [MemoryMatch]) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(results.map(ResultDTO.init)),
+           let text = String(data: data, encoding: .utf8) {
+            print(text)
+        }
+    }
+
+    private func renderCSV(_ results: [MemoryMatch]) {
+        func field(_ value: String) -> String {
+            guard value.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" }) else { return value }
+            return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        }
+        print("citation,score,path,source,startLine,endLine,text")
+        for match in results {
+            print([match.citation, score(match), match.path, match.source,
+                   "\(match.startLine)", "\(match.endLine)", match.text].map(field).joined(separator: ","))
+        }
+    }
+
+    private func renderMarkdown(_ results: [MemoryMatch]) {
+        for match in results {
+            print("### \(match.citation)\n\n**score:** \(percent(match))%\n\n\(match.text)\n")
+        }
+    }
+
+    private func renderXML(_ results: [MemoryMatch]) {
+        func escape(_ value: String) -> String {
+            value.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+        }
+        print("<results>")
+        for match in results {
+            print("  <result citation=\"\(escape(match.citation))\" score=\"\(score(match))\""
+                + " path=\"\(escape(match.path))\" source=\"\(escape(match.source))\""
+                + " startLine=\"\(match.startLine)\" endLine=\"\(match.endLine)\">")
+            print("    <text>\(escape(match.text))</text>")
+            print("  </result>")
+        }
+        print("</results>")
     }
 }
 
