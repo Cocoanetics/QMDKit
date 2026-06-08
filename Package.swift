@@ -22,6 +22,8 @@ let package = Package(
         .package(url: "https://github.com/Cocoanetics/SQLiteKit",
                  branch: "main",
                  traits: ["FTS5", "SQLiteVec"]),
+        // For the `qmd` CLI only — the QMDKit library stays ArgumentParser-free.
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
     ],
     targets: [
         // The engine: a vec0 + FTS5 hybrid store with an on-device Apple
@@ -35,6 +37,14 @@ let package = Package(
         .testTarget(
             name: "QMDKitTests",
             dependencies: ["QMDKit"]
+        ),
+        // The `qmd` command-line tool over QMDKit (semantic + keyword search).
+        .executableTarget(
+            name: "qmd",
+            dependencies: [
+                "QMDKit",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ]
         ),
     ]
 )
