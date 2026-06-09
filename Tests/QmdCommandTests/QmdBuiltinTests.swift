@@ -1,6 +1,5 @@
 import ArgumentParser
 import Foundation
-import QMDKit
 import ShellKit
 import Testing
 @testable import QmdCommand

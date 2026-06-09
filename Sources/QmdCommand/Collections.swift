@@ -1,7 +1,7 @@
 import ArgumentParser
 import Foundation
-import QMDKit
 import ShellKit
+import VectorStore
 
 // MARK: - Config
 

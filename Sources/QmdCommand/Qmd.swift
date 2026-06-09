@@ -1,7 +1,7 @@
 import ArgumentParser
 import Foundation
-import QMDKit
 import ShellKit
+import VectorStore
 
 /// `qmd` — on-device semantic + keyword search over Markdown. Public so a
 /// ShellKit host (SwiftBash) can register it as a sandboxed builtin via
@@ -30,26 +30,9 @@ struct StoreOptions: ParsableArguments {
     var indexPath: String { db ?? (qmdHome() + "/index.sqlite") }
     var configPath: String { home + "/collections.json" }
 
-    /// Opens the store, gating the index path through the host's sandbox first.
-    func open() async throws -> SQLiteVectorStore {
-        let index = Shell.resolve(indexPath)
-        try await Shell.authorize(index)
-        let directory = (index.path as NSString).deletingLastPathComponent
-        if !directory.isEmpty {
-            try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
-        }
-        return try SQLiteVectorStore(storage: .file(index.path), embeddingProvider: Self.embeddingProvider())
-    }
-
-    /// OpenAI when `OPENAI_API_KEY` is set (model overridable via
-    /// `QMD_EMBED_MODEL`); otherwise nil, so the store uses the on-device Apple
-    /// NaturalLanguage embedder.
-    static func embeddingProvider() -> EmbeddingProvider? {
-        let environment = Shell.current.environment
-        guard let key = environment["OPENAI_API_KEY"], !key.isEmpty else { return nil }
-        let model = environment["QMD_EMBED_MODEL"] ?? "text-embedding-3-small"
-        return OpenAIEmbeddingProvider(apiKey: key, model: model)
-    }
+    // `open()` and the embedding-backend selection live in Embeddings.swift —
+    // they need SwiftAgents' `Providers`, which exports a `struct Argument` that
+    // would collide with ArgumentParser's `@Argument` in this file.
 
     func loadConfig() -> Config { Config.load(at: configPath) }
     func saveConfig(_ config: Config) throws { try config.save(to: configPath) }
@@ -223,9 +206,7 @@ extension Qmd {
         @OptionGroup var store: StoreOptions
         func run() async throws {
             out("index:      \(store.indexPath)")
-            let backend = StoreOptions.embeddingProvider()?.embeddingModelIdentifier
-                ?? "Apple NaturalLanguage (on-device)"
-            out("embeddings: \(backend)")
+            out("embeddings: \(StoreOptions.embeddingBackendDescription())")
             out("chunks:     \(try await store.open().count())")
             let collections = store.loadConfig().collections
             if !collections.isEmpty {
