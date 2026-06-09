@@ -12,7 +12,7 @@ public struct Qmd: AsyncParsableCommand {
         abstract: "On-device semantic + keyword search over your Markdown.",
         subcommands: [
             Index.self, Search.self, VSearch.self, Query.self, Get.self, Ls.self,
-            Status.self, Update.self, CollectionCommand.self, Init.self,
+            Status.self, Update.self, CollectionCommand.self, Init.self
         ],
         defaultSubcommand: Query.self)
 

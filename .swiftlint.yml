@@ -1,0 +1,37 @@
+included:
+  - Sources
+  - Tests
+
+excluded:
+  - .build
+  - .swiftpm
+  - "**/.build"
+  - "**/.swiftpm"
+
+# Match Xcode's default "Indent switch statement `case` labels in" setting.
+switch_case_alignment:
+  indented_cases: true
+
+# Short names intrinsic to the qmd CLI: `db` (the `--db` flag), `md` (the
+# `--md` / markdown output format), plus the usual `id` / `n`.
+identifier_name:
+  excluded:
+    - id
+    - n
+    - db
+    - md
+
+# `Ls` mirrors the Unix `ls` command name.
+type_name:
+  excluded:
+    - Ls
+
+# ArgumentParser subcommands nest one level past their parent group
+# (e.g. `Qmd.CollectionCommand.Add`).
+nesting:
+  type_level: 2
+
+# Doc comments and URLs are natural to keep on one line.
+line_length:
+  ignores_comments: true
+  ignores_urls: true

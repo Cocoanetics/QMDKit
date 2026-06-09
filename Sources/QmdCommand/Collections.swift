@@ -140,8 +140,10 @@ extension Qmd {
             let vectorStore = try await store.open()
             for collection in collections {
                 let files = await authorizedFiles(markdownFiles(in: URL(fileURLWithPath: collection.path)))
-                let summary = try await vectorStore.sync(files: files, source: collection.name, workspaceDir: collection.path)
-                out("\(collection.name): indexed \(summary.indexed), unchanged \(summary.unchanged), removed \(summary.removed)")
+                let summary = try await vectorStore.sync(
+                    files: files, source: collection.name, workspaceDir: collection.path)
+                out("\(collection.name): indexed \(summary.indexed), "
+                    + "unchanged \(summary.unchanged), removed \(summary.removed)")
             }
             out("— \(try vectorStore.count()) chunks total")
         }
@@ -179,7 +181,9 @@ extension Qmd {
 
         func run() throws {
             let config = store.loadConfig()
-            let collections = name.map { wanted in config.collections.filter { $0.name == wanted } } ?? config.collections
+            let collections = name.map { wanted in
+                config.collections.filter { $0.name == wanted }
+            } ?? config.collections
             for collection in collections {
                 for file in markdownFiles(in: URL(fileURLWithPath: collection.path)) {
                     let prefix = collection.path + "/"

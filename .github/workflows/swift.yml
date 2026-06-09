@@ -1,0 +1,112 @@
+---
+name: Swift
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+# Cancel superseded runs on the same ref — the Windows/Android cold builds
+# are expensive and only the latest commit on a branch matters.
+concurrency:
+  group: swift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  build-macos:
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Select Xcode 26.4.1
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.4.1"
+      - name: Verify Swift version
+        run: swift --version
+      - name: Build (macOS)
+        run: swift build --build-tests -v
+      - name: Test (macOS)
+        # The sandboxed index + search builtin tests use the on-device
+        # NLContextualEmbedding path, whose model downloads on a fresh runner —
+        # allow extra time rather than a tight ceiling.
+        timeout-minutes: 14
+        run: swift test -v --skip-build
+
+  build-ios:
+    # Compile-only: the `QmdCommand` library is what iBash embeds. The `qmd`
+    # executable uses ShellKit's process-default shell (Process), unavailable
+    # on iOS, so only the library is built.
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Select Xcode 26.4.1
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.4.1"
+      # `-skipMacroValidation` opts out of the Xcode macro-trust prompt —
+      # SwiftMCPMacros (via the SwiftAgents -> SwiftMCP dependency) would
+      # otherwise fail in headless CI with no human to approve it.
+      - name: Build QmdCommand (iOS)
+        run: |
+          xcodebuild -scheme QmdCommand \
+            -destination 'generic/platform=iOS' \
+            -skipMacroValidation \
+            build
+
+  build-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify Swift version
+        run: swift --version
+      # Build the shipped products one at a time. `--build-tests` would pull
+      # SwiftMCP's aggregator build-tool target, which races its own
+      # swift-syntax host build under Linux SwiftPM; building products avoids it.
+      - name: Build (Linux)
+        run: |
+          swift build -v --product QmdCommand
+          swift build -v --product qmd
+
+  build-windows:
+    # NIO is out of the graph (SwiftAgents links only SwiftMCP's NIO-free
+    # `Client` trait), so the SwiftAgents closure builds. We scope to the
+    # `QmdCommand` target — `--product` for an automatic library ends up
+    # compiling SwiftMCP's demo executables with their own Windows gaps.
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Swift
+        uses: SwiftyLab/setup-swift@latest
+        with:
+          swift-version: "6.3.1"
+      - name: Verify Swift version
+        run: swift --version
+      - name: Build QmdCommand (Windows)
+        shell: pwsh
+        run: swift build -v --target QmdCommand
+
+  build-android:
+    # Cross-compile the package (incl. QmdCommand) under the Android SDK via
+    # skiptools — compile-proof only; the builtin tests need an embedder
+    # (Apple NL compiles out, no OpenAI key), so they're not run here.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build (Android)
+        uses: skiptools/swift-android-action@v2
+        with:
+          swift-version: "6.3.2"
+          free-disk-space: true
+          build-tests: true
+          run-tests: false
