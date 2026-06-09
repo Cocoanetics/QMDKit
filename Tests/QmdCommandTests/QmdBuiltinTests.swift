@@ -49,6 +49,21 @@ import Testing
         #expect(output.contains("a.md"))
     }
 
+    @Test func queryWithExpansionInsideSandbox() async throws {
+        let root = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "# Cats\n\nThe cat sat on the warm windowsill.\n"
+            .write(to: root.appendingPathComponent("a.md"), atomically: true, encoding: .utf8)
+        let db = root.appendingPathComponent("idx.sqlite").path
+
+        try await runQmd(["index", root.path, "--db", db], root: root)
+        // `query` runs gate → expand → fuse. With no OPENAI_API_KEY the expander
+        // is the dependency-free template, so this exercises the pipeline offline
+        // and still finds the in-sandbox file.
+        let output = try await runQmd(["query", "--db", db, "cat"], root: root)
+        #expect(output.contains("a.md"))
+    }
+
     @Test func deniesAFileOutsideTheSandbox() async throws {
         let root = try tempDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

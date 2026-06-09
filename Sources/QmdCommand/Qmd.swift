@@ -190,13 +190,19 @@ extension Qmd {
     }
 
     struct Query: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Hybrid search (keyword + semantic).")
+        static let configuration = CommandConfiguration(
+            abstract: "Hybrid search with query expansion (keyword + semantic).")
         @OptionGroup var store: StoreOptions
         @OptionGroup var output: OutputOptions
+        @Option(help: "Domain hint to steer expansion (e.g. \"billing\").") var intent: String?
         @Argument(parsing: .remaining, help: "Query.") var query: [String]
 
         func run() async throws {
-            let results = try await store.open().hybridSearch(text: query.joined(separator: " "), topN: output.count)
+            let results = try await store.open().expandedSearch(
+                text: query.joined(separator: " "),
+                using: StoreOptions.queryExpander(),
+                intent: intent,
+                topN: output.count)
             output.render(results)
         }
     }
