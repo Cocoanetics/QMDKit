@@ -32,6 +32,24 @@ extension StoreOptions {
         return openAI
     }
 
+    /// The query expander: an LLM-backed `lex`/`vec`/`hyde` generator when
+    /// `OPENAI_API_KEY` is set (chat model via `QMD_CHAT_MODEL`, default
+    /// `gpt-4o-mini`); otherwise the dependency-free template expander. Mirrors
+    /// how `embeddingProvider()` selects its backend.
+    static func queryExpander() -> QueryExpander {
+        let environment = Shell.current.environment
+        guard let key = environment["OPENAI_API_KEY"], !key.isEmpty else {
+            return TemplateQueryExpander()
+        }
+        let model = environment["QMD_CHAT_MODEL"] ?? "gpt-4o-mini"
+        return LLMQueryExpander { prompt in
+            let openAI = OpenAI(apiKey: key)
+            let response = try await openAI.createChatCompletion(
+                model: model, messages: [ChatMessage(role: .user, content: .text(prompt))])
+            return response.choices.first?.message.textContent ?? ""
+        }
+    }
+
     /// Human-readable embedding backend label for `qmd status`.
     static func embeddingBackendDescription() -> String {
         embeddingProvider()?.embeddingModelIdentifier ?? "Apple NaturalLanguage (on-device)"
