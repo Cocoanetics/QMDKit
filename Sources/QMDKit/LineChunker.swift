@@ -39,7 +39,7 @@ enum LineChunker {
     ) -> [LineChunk] {
         let chars = Array(content)
         guard !chars.isEmpty else { return [] }
-        let budget = max(64, maxChars)
+        let budget = max(32, maxChars)
         let overlap = max(0, min(overlapChars, budget / 2))
         let window = max(1, min(windowChars, budget))
 
@@ -77,8 +77,11 @@ enum LineChunker {
                 endLine: lineOf[max(start, end - 1)]))
 
             if end >= chars.count { break }
-            var next = end - overlap
-            if next <= start { next = end }   // guarantee forward progress
+            // If we cut right at a structural newline, drop it from the boundary
+            // so neither chunk carries a stray leading/trailing newline.
+            let resume = (chars[end] == "\n") ? end + 1 : end
+            var next = resume - overlap
+            if next <= start { next = resume }   // guarantee forward progress
             start = next
         }
         return chunks
@@ -169,15 +172,15 @@ enum LineChunker {
         let windowStart = target - window
         var bestScore = -1.0
         var bestPos = target
-        for bp in breaks {
-            if bp.pos < windowStart { continue }
-            if bp.pos > target { break }
-            if isInsideFence(bp.pos, fences) { continue }
-            let normalized = Double(target - bp.pos) / Double(window)
-            let finalScore = Double(bp.score) * (1.0 - normalized * normalized * decay)
+        for breakPoint in breaks {
+            if breakPoint.pos < windowStart { continue }
+            if breakPoint.pos > target { break }
+            if isInsideFence(breakPoint.pos, fences) { continue }
+            let normalized = Double(target - breakPoint.pos) / Double(window)
+            let finalScore = Double(breakPoint.score) * (1.0 - normalized * normalized * decay)
             if finalScore > bestScore {
                 bestScore = finalScore
-                bestPos = bp.pos
+                bestPos = breakPoint.pos
             }
         }
         return bestPos

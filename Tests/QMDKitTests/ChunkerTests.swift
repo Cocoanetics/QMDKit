@@ -21,7 +21,7 @@ import Testing
         #expect(chunks.count >= 2)
         // A chunk that follows a break begins exactly at a heading's newline —
         // the scored break-point logic chose the heading over weaker breaks.
-        #expect(chunks.dropFirst().contains { $0.text.hasPrefix("\n## ") })
+        #expect(chunks.dropFirst().contains { $0.text.hasPrefix("## ") })
     }
 
     @Test func neverSplitsInsideACodeFence() {
@@ -47,9 +47,16 @@ import Testing
         }
     }
 
-    @Test func chunksOverlap() {
-        let doc = String(repeating: "alpha beta gamma delta epsilon zeta. ", count: 30)
+    @Test func chunksOverlapAcrossLines() {
+        let doc = (1 ... 40).map { "Sentence number \($0) with a handful of words." }
+            .joined(separator: "\n") + "\n"
         let chunks = LineChunker.chunk(doc, maxChars: 200, overlapChars: 60)
-        #expect(chunks.count >= 2)   // long single-paragraph line still chunks
+        #expect(chunks.count >= 2)
+        #expect(chunks.first?.startLine == 1)
+        #expect((chunks.last?.endLine ?? 0) >= 40)
+        // Consecutive chunks overlap: each begins at or before the previous one's last line.
+        for index in chunks.indices.dropFirst() {
+            #expect(chunks[index].startLine <= chunks[index - 1].endLine)
+        }
     }
 }
