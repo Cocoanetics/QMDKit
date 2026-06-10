@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import Providers
 import ShellKit
 import Testing
 @testable import QmdCommand
@@ -95,6 +96,25 @@ import Testing
         // --rerank with no OPENAI_API_KEY → the reranker is skipped, query still works.
         let output = try await runQmd(["query", "--rerank", "--db", db, "cat"], root: root)
         #expect(output.contains("a.md"))
+    }
+
+    @Test func ollamaBackendIsRoleWrapped() async throws {
+        let sink = OutputSink()
+        let shell = Shell(
+            stdout: sink, stderr: .discard,
+            environment: Environment(variables: [
+                "QMD_EMBED_BACKEND": "ollama",
+                "QMD_EMBED_MODEL": "embeddinggemma"
+            ], workingDirectory: "/"),
+            sandbox: .rooted(at: URL(fileURLWithPath: "/")))
+        try await Shell.$current.withValue(shell) {
+            // An instruction-tuned model is wrapped so the query/document prompt
+            // asymmetry applies; the wrapper still reports the real model so the
+            // store's embed-fingerprint is unchanged.
+            let provider = StoreOptions.embeddingProvider()
+            #expect(provider is InstructionPrefixEmbeddingProvider)
+            #expect(provider?.embeddingModelIdentifier == "embeddinggemma")
+        }
     }
 
     @Test func deniesAFileOutsideTheSandbox() async throws {
