@@ -20,11 +20,30 @@ extension StoreOptions {
         return try SQLiteVectorStore(storage: .file(index.path), embeddingProvider: Self.embeddingProvider())
     }
 
-    /// OpenAI when `OPENAI_API_KEY` is set (model overridable via
-    /// `QMD_EMBED_MODEL`); otherwise nil, so the store falls back to the
-    /// on-device Apple NaturalLanguage embedder.
+    /// The embedding backend, in precedence order:
+    /// 1. **Ollama** when `QMD_EMBED_BACKEND=ollama` — a local instruction-tuned
+    ///    model (`QMD_EMBED_MODEL`, default `embeddinggemma`) served at
+    ///    `OLLAMA_URL` (default `http://localhost:11434`). Wrapped in
+    ///    `InstructionPrefixEmbeddingProvider` for known families so the
+    ///    query/document prompt asymmetry is honored — with `embeddinggemma`
+    ///    the vectors are compatible with a real qmd index.
+    /// 2. **OpenAI** when `OPENAI_API_KEY` is set (`QMD_EMBED_MODEL` overrides
+    ///    the model). Symmetric — no role prefixes.
+    /// 3. Otherwise nil → the store's on-device Apple NaturalLanguage embedder.
     static func embeddingProvider() -> EmbeddingProvider? {
         let environment = Shell.current.environment
+
+        if environment["QMD_EMBED_BACKEND"]?.lowercased() == "ollama" {
+            let model = environment["QMD_EMBED_MODEL"] ?? "embeddinggemma"
+            let host = environment["OLLAMA_URL"] ?? "http://localhost:11434"
+            guard let url = URL(string: host) else { return nil }
+            let ollama = OllamaAPI(endpointURL: url, versionPath: "v1")
+            ollama.embeddingModelIdentifier = model
+            guard let template = InstructionPrefixEmbeddingProvider.Template
+                .matching(modelIdentifier: model) else { return ollama }
+            return InstructionPrefixEmbeddingProvider(wrapping: ollama, template: template)
+        }
+
         guard let key = environment["OPENAI_API_KEY"], !key.isEmpty else { return nil }
         let model = environment["QMD_EMBED_MODEL"] ?? "text-embedding-3-small"
         let openAI = OpenAI(apiKey: key)
