@@ -72,15 +72,20 @@ struct OutputOptions: ParsableArguments {
     }
 
     private func score(_ match: MemoryMatch) -> String { String(format: "%.4f", match.score) }
-    private func percent(_ match: MemoryMatch) -> Int { Int((match.score * 100).rounded()) }
+    // RRF / blended scores aren't absolute confidences, so the percentage is
+    // shown relative to the top result (the best match is 100%).
+    private func percent(_ match: MemoryMatch, relativeTo top: Double) -> Int {
+        top > 0 ? Int((match.score / top * 100).rounded()) : 0
+    }
     private func firstLine(_ text: String) -> String {
         text.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
     }
 
     private func renderCLI(_ results: [MemoryMatch]) {
         guard !results.isEmpty else { warn("no matches"); return }
+        let top = results.map(\.score).max() ?? 0
         for match in results {
-            out("\(match.citation)  \(percent(match))%")
+            out("\(match.citation)  \(percent(match, relativeTo: top))%")
             let snippet = firstLine(match.text)
             if !snippet.isEmpty { out("  \(snippet)") }
         }
@@ -108,8 +113,9 @@ struct OutputOptions: ParsableArguments {
     }
 
     private func renderMarkdown(_ results: [MemoryMatch]) {
+        let top = results.map(\.score).max() ?? 0
         for match in results {
-            out("### \(match.citation)\n\n**score:** \(percent(match))%\n\n\(match.text)\n")
+            out("### \(match.citation)\n\n**score:** \(percent(match, relativeTo: top))%\n\n\(match.text)\n")
         }
     }
 
@@ -195,14 +201,30 @@ extension Qmd {
         @OptionGroup var store: StoreOptions
         @OptionGroup var output: OutputOptions
         @Option(help: "Domain hint to steer expansion (e.g. \"billing\").") var intent: String?
-        @Argument(parsing: .remaining, help: "Query.") var query: [String]
+        @Option(name: .long, help: "Pre-typed keyword query; repeatable. Skips expansion.") var lex: [String] = []
+        @Option(name: .long, help: "Pre-typed semantic query; repeatable.") var vec: [String] = []
+        @Option(name: .long, help: "Pre-typed hypothetical-answer query; repeatable.") var hyde: [String] = []
+        @Argument(parsing: .remaining, help: "Query.") var query: [String] = []
 
         func run() async throws {
-            let results = try await store.open().expandedSearch(
-                text: query.joined(separator: " "),
-                using: StoreOptions.queryExpander(),
-                intent: intent,
-                topN: output.count)
+            let text = query.joined(separator: " ")
+            let vectorStore = try await store.open()
+            let results: [MemoryMatch]
+            if lex.isEmpty, vec.isEmpty, hyde.isEmpty {
+                results = try await vectorStore.expandedSearch(
+                    text: text, using: StoreOptions.queryExpander(), intent: intent, topN: output.count)
+            } else {
+                // Caller-supplied typed queries route straight into RRF, skipping
+                // the internal expander; the positional text (if any) is original.
+                var vectorQueries = vec + hyde
+                var keywordQueries = lex
+                if !text.isEmpty {
+                    vectorQueries.insert(text, at: 0)
+                    keywordQueries.insert(text, at: 0)
+                }
+                results = try await vectorStore.fusedSearch(
+                    vector: vectorQueries, keyword: keywordQueries, topN: output.count)
+            }
             output.render(results)
         }
     }
