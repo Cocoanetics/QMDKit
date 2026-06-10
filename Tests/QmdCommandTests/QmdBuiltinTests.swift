@@ -79,6 +79,24 @@ import Testing
         #expect(output.contains("a.md"))
     }
 
+    @Test func batchRerankerParsesScores() {
+        let scores = OpenAIBatchReranker.parse("1: 90\n2: 30\n[3]: 75\ngarbage line", count: 3)
+        #expect(scores.map { ($0 * 100).rounded() } == [90, 30, 75])
+    }
+
+    @Test func rerankFlagDegradesWithoutKey() async throws {
+        let root = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "# Cats\n\nThe cat sat on the warm windowsill.\n"
+            .write(to: root.appendingPathComponent("a.md"), atomically: true, encoding: .utf8)
+        let db = root.appendingPathComponent("idx.sqlite").path
+
+        try await runQmd(["index", root.path, "--db", db], root: root)
+        // --rerank with no OPENAI_API_KEY → the reranker is skipped, query still works.
+        let output = try await runQmd(["query", "--rerank", "--db", db, "cat"], root: root)
+        #expect(output.contains("a.md"))
+    }
+
     @Test func deniesAFileOutsideTheSandbox() async throws {
         let root = try tempDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

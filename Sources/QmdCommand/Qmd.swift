@@ -204,15 +204,20 @@ extension Qmd {
         @Option(name: .long, help: "Pre-typed keyword query; repeatable. Skips expansion.") var lex: [String] = []
         @Option(name: .long, help: "Pre-typed semantic query; repeatable.") var vec: [String] = []
         @Option(name: .long, help: "Pre-typed hypothetical-answer query; repeatable.") var hyde: [String] = []
+        @Flag(help: "Rerank the fused shortlist with an LLM (needs OPENAI_API_KEY).") var rerank = false
         @Argument(parsing: .remaining, help: "Query.") var query: [String] = []
 
         func run() async throws {
             let text = query.joined(separator: " ")
             let vectorStore = try await store.open()
-            let results: [MemoryMatch]
+            let reranker = rerank ? StoreOptions.reranker() : nil
+            // Rerank over a wider shortlist, then cut to the requested count.
+            let pool = reranker != nil ? max(output.count * 4, 20) : output.count
+
+            let candidates: [MemoryMatch]
             if lex.isEmpty, vec.isEmpty, hyde.isEmpty {
-                results = try await vectorStore.expandedSearch(
-                    text: text, using: StoreOptions.queryExpander(), intent: intent, topN: output.count)
+                candidates = try await vectorStore.expandedSearch(
+                    text: text, using: StoreOptions.queryExpander(), intent: intent, topN: pool)
             } else {
                 // Caller-supplied typed queries route straight into RRF, skipping
                 // the internal expander; the positional text (if any) is original.
@@ -222,10 +227,16 @@ extension Qmd {
                     vectorQueries.insert(text, at: 0)
                     keywordQueries.insert(text, at: 0)
                 }
-                results = try await vectorStore.fusedSearch(
-                    vector: vectorQueries, keyword: keywordQueries, topN: output.count)
+                candidates = try await vectorStore.fusedSearch(
+                    vector: vectorQueries, keyword: keywordQueries, topN: pool)
             }
-            output.render(results)
+
+            var results = candidates
+            if let reranker {
+                results = try await vectorStore.rerank(
+                    query: text, candidates: candidates, using: reranker, intent: intent)
+            }
+            output.render(Array(results.prefix(output.count)))
         }
     }
 
