@@ -62,6 +62,21 @@ import Testing
         // and still finds the in-sandbox file.
         let output = try await runQmd(["query", "--db", db, "cat"], root: root)
         #expect(output.contains("a.md"))
+        #expect(output.contains("100%"))   // top result normalized to 100%
+    }
+
+    @Test func structuredQueryBypassesExpansion() async throws {
+        let root = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "# Cats\n\nThe cat sat on the warm windowsill.\n"
+            .write(to: root.appendingPathComponent("a.md"), atomically: true, encoding: .utf8)
+        let db = root.appendingPathComponent("idx.sqlite").path
+
+        try await runQmd(["index", root.path, "--db", db], root: root)
+        // Caller-typed lex/vec queries skip the expander and go straight to RRF.
+        let output = try await runQmd(
+            ["query", "--db", db, "--lex", "cat", "--vec", "a feline pet"], root: root)
+        #expect(output.contains("a.md"))
     }
 
     @Test func deniesAFileOutsideTheSandbox() async throws {
