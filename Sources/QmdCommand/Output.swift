@@ -1,7 +1,7 @@
 import ArgumentParser
 import Foundation
 import ShellKit
-import VectorStore
+import SemanticStore
 
 // The search result output layer: formats, score display, and the renderers
 // shared by `search` / `vsearch` / `query`. Mirrors the original qmd's

@@ -17,11 +17,12 @@ let package = Package(
         .executable(name: "qmd", targets: ["qmd"]),
     ],
     dependencies: [
-        // The search engine lives upstream in SwiftAgents: `SQLiteVectorStore`
-        // (sqlite-vec `vec0` + FTS5 hybrid), the markdown-aware chunker, and the
-        // embedding providers (Apple NaturalLanguage / OpenAI / Ollama). qmd is a
-        // pure consumer — the `SQLiteVectorStore` trait pulls in SQLiteKit
-        // (FTS5 + SQLiteVec) transitively, so there's no direct SQLiteKit dep.
+        // The search engine lives upstream in SwiftAgents' SemanticStore:
+        // `SQLiteVectorStore` (sqlite-vec `vec0` + FTS5 hybrid), the
+        // markdown-aware chunker, and the embedding providers (Apple
+        // NaturalLanguage / OpenAI / Ollama). qmd is a pure consumer — the
+        // `SQLiteVectorStore` trait pulls in SQLiteKit (FTS5 + SQLiteVec)
+        // transitively, so there's no direct SQLiteKit dep.
         .package(url: "https://github.com/Cocoanetics/SwiftAgents",
                  branch: "main",
                  traits: ["SQLiteVectorStore"]),
@@ -35,11 +36,11 @@ let package = Package(
         // The qmd command logic — routes IO through ShellKit's `Shell.current`
         // and gates every path via `Shell.authorize`, so it runs both standalone
         // and as a sandboxed SwiftBash builtin. The engine is SwiftAgents'
-        // `VectorStore` (the store + chunker) and `Providers` (embeddings).
+        // `SemanticStore` (the store + chunker) and `Providers` (embeddings).
         .target(
             name: "QmdCommand",
             dependencies: [
-                .product(name: "VectorStore", package: "SwiftAgents"),
+                .product(name: "SemanticStore", package: "SwiftAgents"),
                 .product(name: "Providers", package: "SwiftAgents"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "ShellKit", package: "ShellKit"),

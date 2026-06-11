@@ -1,7 +1,7 @@
 import ArgumentParser
 import Foundation
 import ShellKit
-import VectorStore
+import SemanticStore
 
 /// `qmd` — on-device semantic + keyword search over Markdown. Public so a
 /// ShellKit host (SwiftBash) can register it as a sandboxed builtin via
