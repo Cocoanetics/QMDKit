@@ -204,8 +204,15 @@ extension Qmd {
             out(output)
         }
 
+        /// A `path:from[:count]` argument, split into its parts.
+        struct LineRange {
+            let path: String
+            let from: Int
+            let count: Int?
+        }
+
         /// Parses a trailing `:from` or `:from:count` off a path.
-        static func lineSuffix(of path: String) -> (path: String, from: Int, count: Int?)? {
+        static func lineSuffix(of path: String) -> LineRange? {
             let pattern = "^(.+?):(\\d+)(?::(\\d+))?$"
             guard let regex = try? NSRegularExpression(pattern: pattern),
                   let match = regex.firstMatch(in: path, range: NSRange(path.startIndex..., in: path)),
@@ -213,7 +220,7 @@ extension Qmd {
                   let fromRange = Range(match.range(at: 2), in: path),
                   let from = Int(path[fromRange]) else { return nil }
             let count = Range(match.range(at: 3), in: path).flatMap { Int(path[$0]) }
-            return (String(path[pathRange]), from, count)
+            return LineRange(path: String(path[pathRange]), from: from, count: count)
         }
     }
 

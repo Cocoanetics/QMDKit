@@ -42,7 +42,7 @@ enum Snippet {
         "show", "some", "tell", "them", "that", "this", "want", "what",
         "when", "will", "with", "your",
         // Search-context noise
-        "about", "looking", "notes", "search", "where", "which",
+        "about", "looking", "notes", "search", "where", "which"
     ]
 
     /// Meaningful terms from an intent string: lowercased, stripped of edge
