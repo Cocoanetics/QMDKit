@@ -45,6 +45,18 @@ import Testing
         #expect(result.text == "five cat\nsix\nseven\neight")
     }
 
+    @Test func staleRegionBeyondEOFFallsBackToWholeDocument() {
+        // The index says the chunk spans lines 40–60, but the file has been
+        // shortened to 3 lines since — scan the live document instead.
+        let shrunk = "alpha\nbeta cat\ngamma"
+        let found = Snippet.extract(body: shrunk, query: "cat", region: 40 ... 60)
+        #expect(found.line == 2)
+        #expect(found.text.contains("beta cat"))
+        // No literal match either → anchors on line 1 without trapping.
+        let none = Snippet.extract(body: shrunk, query: "zzz", region: 40 ... 60)
+        #expect(none.line == 1)
+    }
+
     @Test func intentTermsBreakTies() {
         let body = "alpha topic\nbeta topic billing\ngamma"
         let plain = Snippet.extract(body: body, query: "topic")

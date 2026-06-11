@@ -74,6 +74,13 @@ enum Snippet {
     ) -> SnippetResult {
         let lines = body.components(separatedBy: "\n")
 
+        // A region starting past the current EOF means the file shrank since
+        // it was indexed — the stored line span is stale, so scan the whole
+        // re-read document instead of anchoring (and trapping) beyond it.
+        if let region, region.lowerBound > lines.count {
+            return extract(body: body, query: query, maxLen: maxLen, intent: intent)
+        }
+
         // 0-based inclusive search window.
         let searchLo = region.map { max(0, $0.lowerBound - 2) } ?? 0
         let searchHi = region.map { min(lines.count - 1, $0.upperBound) } ?? (lines.count - 1)
