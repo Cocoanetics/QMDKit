@@ -1,7 +1,7 @@
 import Foundation
 import Providers
+import SemanticStore
 import ShellKit
-import VectorStore
 
 // The store-opening + embedding-backend selection are isolated here, away from
 // the command-parsing files: SwiftAgents' `Providers` exports a `struct
