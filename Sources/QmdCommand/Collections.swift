@@ -48,8 +48,10 @@ func qmdHome() -> String {
 }
 
 /// Resolve a user path to an absolute file using the collections as roots.
-/// Accepts an existing file path, `collection/relative/path`, or a relative
-/// path found under any collection root.
+/// Accepts an existing file path, `collection/relative/path`, a relative path
+/// found under any collection root, or a shell-CWD-relative path — the last
+/// also with a leading `source/` stripped, so the `source/path` identifiers
+/// search prints resolve even for ad-hoc (`qmd index .`) sources.
 func resolveDocument(_ path: String, config: Config) -> String? {
     let manager = FileManager.default
     if manager.fileExists(atPath: path) { return path }
@@ -62,7 +64,9 @@ func resolveDocument(_ path: String, config: Config) -> String? {
         let candidate = collection.path + "/" + path
         if manager.fileExists(atPath: candidate) { return candidate }
     }
-    return nil
+    var candidates = [Shell.resolve(path).path]
+    if parts.count == 2 { candidates.append(Shell.resolve(parts[1]).path) }
+    return candidates.first { manager.fileExists(atPath: $0) }
 }
 
 // MARK: - Commands
@@ -149,27 +153,74 @@ extension Qmd {
         }
     }
 
-    /// `qmd get <path>` — print a document.
+    /// `qmd get <path>[:from[:count]]` — print a document (or a line range).
     struct Get: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Print a document by path.")
         @OptionGroup var store: StoreOptions
-        @Flag(name: .long, help: "Prefix each line with its number.") var lineNumbers = false
-        @Argument(help: "Document path (collection/relative, or a file path).") var path: String
+        @Flag(name: .customLong("line-numbers"), inversion: .prefixedNo,
+              help: "Prefix each line with its number (default: on).")
+        var lineNumbers = true
+        @Option(name: .customShort("l"), help: "Maximum number of lines to print.")
+        var maxLines: Int?
+        @Option(name: .long, help: "Start line (1-based).")
+        var from: Int?
+        @Argument(help: "Document path (collection/relative, or a file path), optionally :from[:count].")
+        var path: String
 
         func run() async throws {
-            guard let resolved = resolveDocument(path, config: store.loadConfig()) else {
-                warn("not found: \(path)")
+            // Search prints `file:line` headers; accept them back here. Two
+            // suffix forms — "file.md:100" and "file.md:100:40" — with the
+            // explicit --from / -l flags winning over the parsed values.
+            var input = path
+            var start = from
+            var count = maxLines
+            if let range = Self.lineSuffix(of: input) {
+                if start == nil { start = range.from }
+                if count == nil { count = range.count }
+                input = range.path
+            }
+
+            guard let resolved = resolveDocument(input, config: store.loadConfig()) else {
+                warn("not found: \(input)")
                 throw ExitCode.failure
             }
             try await Shell.authorize(URL(fileURLWithPath: resolved))
             let content = try String(contentsOfFile: resolved, encoding: .utf8)
-            if lineNumbers {
-                for (index, line) in content.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-                    out("\(index + 1)\t\(line)")
-                }
-            } else {
-                outRaw(content.hasSuffix("\n") ? content : content + "\n")
+
+            let firstLine = max(1, start ?? 1)
+            var lines = content.components(separatedBy: "\n")
+            if start != nil || count != nil {
+                let low = min(max(0, firstLine - 1), lines.count)
+                let high = count.map { min(lines.count, low + max(0, $0)) } ?? lines.count
+                lines = Array(lines[low ..< high])
             }
+            var output = lines.joined(separator: "\n")
+            // Line numbers default on so the caller can cite exact lines and
+            // request follow-up ranges via path:from:count.
+            if lineNumbers { output = Snippet.addLineNumbers(output, startLine: firstLine) }
+
+            out(input)
+            out("---\n")
+            out(output)
+        }
+
+        /// A `path:from[:count]` argument, split into its parts.
+        struct LineRange {
+            let path: String
+            let from: Int
+            let count: Int?
+        }
+
+        /// Parses a trailing `:from` or `:from:count` off a path.
+        static func lineSuffix(of path: String) -> LineRange? {
+            let pattern = "^(.+?):(\\d+)(?::(\\d+))?$"
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: path, range: NSRange(path.startIndex..., in: path)),
+                  let pathRange = Range(match.range(at: 1), in: path),
+                  let fromRange = Range(match.range(at: 2), in: path),
+                  let from = Int(path[fromRange]) else { return nil }
+            let count = Range(match.range(at: 3), in: path).flatMap { Int(path[$0]) }
+            return LineRange(path: String(path[pathRange]), from: from, count: count)
         }
     }
 
