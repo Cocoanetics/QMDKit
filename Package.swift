@@ -17,7 +17,7 @@ let package = Package(
         .executable(name: "qmd", targets: ["qmd"]),
     ],
     dependencies: [
-        // The search engine lives upstream in SwiftAgents' SemanticStore:
+        // The search engine lives upstream in SwiftAgents' `SemanticStore`:
         // `SQLiteVectorStore` (sqlite-vec `vec0` + FTS5 hybrid), the
         // markdown-aware chunker, and the embedding providers (Apple
         // NaturalLanguage / OpenAI / Ollama). qmd is a pure consumer — the

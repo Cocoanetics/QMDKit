@@ -1,7 +1,7 @@
 import ArgumentParser
 import Foundation
-import ShellKit
 import SemanticStore
+import ShellKit
 
 // MARK: - Config
 
