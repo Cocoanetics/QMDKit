@@ -40,9 +40,32 @@ qmd "how do I rotate the API key"
 qmd search "error code 42"               # keyword only (FTS5)
 qmd vsearch "a feline on a windowsill"   # semantic only (vec0)
 
-qmd get notes/ideas.md --line-numbers    # print a document
+qmd get notes/ideas.md:87:12             # print a document (or 12 lines from line 87)
 qmd status                               # index info + embedding backend
 ```
+
+Search results render like the original qmd: a `source/path:line` header, the
+document title, a score, and a query-centered snippet with a diff-style
+position header —
+
+```
+files/report.md:32
+Title: Shell I/O Report
+Score:  41%
+
+@@ -31,4 @@ (30 before, 28 after)
+Paragraph 4.3: pipeline glob completion expansion shell …
+The host multiplexes the input streams across every builtin command.
+```
+
+The `source/path:line` header pipes straight back into `qmd get` (line numbers
+are on by default there; `:from[:count]` suffixes request follow-up ranges).
+On a terminal (`TERM` set) the header is also an OSC-8 hyperlink to the file —
+a `file://` URL by default, so a host like iBash opens it in its file editor;
+set `QMD_EDITOR_URI` (e.g. `vscode://file/{path}:{line}:{col}`) to retarget it.
+`--full` swaps the snippet for the whole document, `--line-numbers` prefixes
+content lines, `--min-score`/`--all` shape the result set, `-c <collection>`
+restricts sources, and `--intent` steers expansion *and* snippet selection.
 
 ### Collections
 
@@ -57,7 +80,7 @@ qmd ls docs         # list a collection's files
 
 ### Output formats
 
-`--cli` (default, colorized) · `--json` · `--files` (`citation⇥score`, for piping to agents) · `--csv` · `--md` · `--xml`; `-n` sets the result count.
+`--format <kind>` (or the flag aliases): `cli` (default, colorized) · `json` · `files` (`citation⇥score`, for piping to agents) · `csv` · `md` · `xml`; `-n` sets the result count (default 5; 20 for files/json). All formats except `files` carry the snippet (or, with `--full`, the document).
 
 ### Index location
 

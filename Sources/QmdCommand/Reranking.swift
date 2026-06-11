@@ -1,7 +1,7 @@
 import Foundation
 import Providers
 import ShellKit
-import VectorStore
+import SemanticStore
 
 /// A batch reranker: one chat call scores every candidate, so reranking a
 /// shortlist costs a single request (OpenAI has no cross-encoder endpoint). It's

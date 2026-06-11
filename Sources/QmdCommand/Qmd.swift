@@ -1,7 +1,7 @@
 import ArgumentParser
 import Foundation
 import ShellKit
-import VectorStore
+import SemanticStore
 
 /// `qmd` — on-device semantic + keyword search over Markdown. Public so a
 /// ShellKit host (SwiftBash) can register it as a sandboxed builtin via
@@ -38,116 +38,6 @@ struct StoreOptions: ParsableArguments {
     func saveConfig(_ config: Config) throws { try config.save(to: configPath) }
 }
 
-/// Output format — exposed as mutually-exclusive flags (`--json`, `--files`, …).
-enum OutputFormat: String, EnumerableFlag {
-    case cli, json, files, csv, md, xml
-    static func help(for value: OutputFormat) -> ArgumentHelp? {
-        switch value {
-            case .cli:   return "Colorized listing (default)."
-            case .json:  return "JSON array."
-            case .files: return "`citation<TAB>score` per line, for piping to agents."
-            case .csv:   return "CSV with a header row."
-            case .md:    return "Markdown."
-            case .xml:   return "XML."
-        }
-    }
-}
-
-/// `-n` plus the result format. Shared by every search subcommand.
-struct OutputOptions: ParsableArguments {
-    @Option(name: .customShort("n"), help: "Maximum number of results.")
-    var count = 5
-    @Flag(help: "Output format.")
-    var format: OutputFormat = .cli
-
-    func render(_ results: [MemoryMatch]) {
-        switch format {
-            case .cli:   renderCLI(results)
-            case .json:  renderJSON(results)
-            case .files: for match in results { out("\(match.citation)\t\(score(match))") }
-            case .csv:   renderCSV(results)
-            case .md:    renderMarkdown(results)
-            case .xml:   renderXML(results)
-        }
-    }
-
-    private func score(_ match: MemoryMatch) -> String { String(format: "%.4f", match.score) }
-    // RRF / blended scores aren't absolute confidences, so the percentage is
-    // shown relative to the top result (the best match is 100%).
-    private func percent(_ match: MemoryMatch, relativeTo top: Double) -> Int {
-        top > 0 ? Int((match.score / top * 100).rounded()) : 0
-    }
-    private func firstLine(_ text: String) -> String {
-        text.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
-    }
-
-    private func renderCLI(_ results: [MemoryMatch]) {
-        guard !results.isEmpty else { warn("no matches"); return }
-        let top = results.map(\.score).max() ?? 0
-        for match in results {
-            out("\(match.citation)  \(percent(match, relativeTo: top))%")
-            let snippet = firstLine(match.text)
-            if !snippet.isEmpty { out("  \(snippet)") }
-        }
-    }
-
-    private func renderJSON(_ results: [MemoryMatch]) {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        if let data = try? encoder.encode(results.map(ResultDTO.init)),
-           let text = String(data: data, encoding: .utf8) {
-            out(text)
-        }
-    }
-
-    private func renderCSV(_ results: [MemoryMatch]) {
-        func field(_ value: String) -> String {
-            guard value.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" }) else { return value }
-            return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
-        }
-        out("citation,score,path,source,startLine,endLine,text")
-        for match in results {
-            out([match.citation, score(match), match.path, match.source,
-                 "\(match.startLine)", "\(match.endLine)", match.text].map(field).joined(separator: ","))
-        }
-    }
-
-    private func renderMarkdown(_ results: [MemoryMatch]) {
-        let top = results.map(\.score).max() ?? 0
-        for match in results {
-            out("### \(match.citation)\n\n**score:** \(percent(match, relativeTo: top))%\n\n\(match.text)\n")
-        }
-    }
-
-    private func renderXML(_ results: [MemoryMatch]) {
-        func escape(_ value: String) -> String {
-            value.replacingOccurrences(of: "&", with: "&amp;")
-                .replacingOccurrences(of: "<", with: "&lt;")
-                .replacingOccurrences(of: ">", with: "&gt;")
-                .replacingOccurrences(of: "\"", with: "&quot;")
-        }
-        out("<results>")
-        for match in results {
-            out("  <result citation=\"\(escape(match.citation))\" score=\"\(score(match))\""
-                + " path=\"\(escape(match.path))\" source=\"\(escape(match.source))\""
-                + " startLine=\"\(match.startLine)\" endLine=\"\(match.endLine)\">")
-            out("    <text>\(escape(match.text))</text>")
-            out("  </result>")
-        }
-        out("</results>")
-    }
-}
-
-private struct ResultDTO: Encodable {
-    let path, source, citation, text: String
-    let startLine, endLine: Int
-    let score: Double
-    init(_ match: MemoryMatch) {
-        path = match.path; source = match.source; citation = match.citation; text = match.text
-        startLine = match.startLine; endLine = match.endLine; score = match.score
-    }
-}
-
 extension Qmd {
     struct Index: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Index a directory of Markdown files.")
@@ -176,8 +66,13 @@ extension Qmd {
         @Argument(parsing: .remaining, help: "Query terms.") var query: [String]
 
         func run() async throws {
-            let results = try await store.open().keywordSearch(ftsQuery(query), topN: output.count)
-            output.render(results)
+            let text = query.joined(separator: " ")
+            // Over-fetch so --min-score / -c filtering can't starve the limit.
+            let fetch = output.all ? 100_000 : max(50, output.limit * 2)
+            let matches = try await store.open()
+                .keywordSearch(ftsQuery(query), topN: fetch, sources: output.sources)
+            let rows = matches.map { ResultRow(match: $0, score: $0.score) }
+            await output.render(rows, query: text, config: store.loadConfig())
         }
     }
 
@@ -190,8 +85,13 @@ extension Qmd {
         @Argument(parsing: .remaining, help: "Query.") var query: [String]
 
         func run() async throws {
-            let results = try await store.open().search(text: query.joined(separator: " "), topN: output.count)
-            output.render(results)
+            let text = query.joined(separator: " ")
+            let fetch = output.all ? 500 : max(20, output.limit * 2)
+            let matches = try await store.open()
+                .search(text: text, topN: fetch, sources: output.sources)
+            let rows = matches.map { ResultRow(match: $0, score: $0.score) }
+            // Vector similarity defaults to a 0.3 floor, like the original.
+            await output.render(rows, query: text, config: store.loadConfig(), defaultMinScore: 0.3)
         }
     }
 
@@ -200,7 +100,6 @@ extension Qmd {
             abstract: "Hybrid search with query expansion (keyword + semantic).")
         @OptionGroup var store: StoreOptions
         @OptionGroup var output: OutputOptions
-        @Option(help: "Domain hint to steer expansion (e.g. \"billing\").") var intent: String?
         @Option(name: .long, help: "Pre-typed keyword query; repeatable. Skips expansion.") var lex: [String] = []
         @Option(name: .long, help: "Pre-typed semantic query; repeatable.") var vec: [String] = []
         @Option(name: .long, help: "Pre-typed hypothetical-answer query; repeatable.") var hyde: [String] = []
@@ -211,13 +110,15 @@ extension Qmd {
             let text = query.joined(separator: " ")
             let vectorStore = try await store.open()
             let reranker = rerank ? StoreOptions.reranker() : nil
+            let limit = output.all ? 1000 : output.limit
             // Rerank over a wider shortlist, then cut to the requested count.
-            let pool = reranker != nil ? max(output.count * 4, 20) : output.count
+            let pool = reranker != nil ? max(limit * 4, 20) : limit
 
             let candidates: [MemoryMatch]
             if lex.isEmpty, vec.isEmpty, hyde.isEmpty {
                 candidates = try await vectorStore.expandedSearch(
-                    text: text, using: StoreOptions.queryExpander(), intent: intent, topN: pool)
+                    text: text, using: StoreOptions.queryExpander(), intent: output.intent,
+                    topN: pool, sources: output.sources)
             } else {
                 // Caller-supplied typed queries route straight into RRF, skipping
                 // the internal expander; the positional text (if any) is original.
@@ -228,15 +129,23 @@ extension Qmd {
                     keywordQueries.insert(text, at: 0)
                 }
                 candidates = try await vectorStore.fusedSearch(
-                    vector: vectorQueries, keyword: keywordQueries, topN: pool)
+                    vector: vectorQueries, keyword: keywordQueries, topN: pool, sources: output.sources)
             }
 
-            var results = candidates
+            let rows: [ResultRow]
             if let reranker {
-                results = try await vectorStore.rerank(
-                    query: text, candidates: candidates, using: reranker, intent: intent)
+                // The blend is position-aware and 0–1; report it directly.
+                let reranked = try await vectorStore.rerank(
+                    query: text, candidates: candidates, using: reranker, intent: output.intent)
+                rows = reranked.map { ResultRow(match: $0, score: $0.score) }
+            } else {
+                // Raw RRF scores aren't confidences — report the positional
+                // 1/rank the way the original does.
+                rows = candidates.enumerated().map {
+                    ResultRow(match: $0.element, score: 1.0 / Double($0.offset + 1))
+                }
             }
-            output.render(Array(results.prefix(output.count)))
+            await output.render(rows, query: text, config: store.loadConfig())
         }
     }
 
